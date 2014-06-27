@@ -11,7 +11,7 @@ unpackNum (Number n) = n
 --                        [] -> 0
 --                        ((x,_):_) -> x                           
 --unpackNum (List [n]) = unpackNum n
-unpackNum _ = 0
+unpackNum v = error $ show v ++ " is not a number."
 
 numericBinop :: (Integer -> Integer -> Integer) -> [LispVal] -> LispVal
 numericBinop f ls = Number $ foldl1' f $ map unpackNum ls
