@@ -1,3 +1,4 @@
+{-# Language ExistentialQuantification #-}
 import System.Environment
 import Data.List(foldl1')
 import Control.Monad.Error
@@ -6,6 +7,23 @@ import Parser
 import Types
 import Error
 
+data Unpacker = 
+  forall a. Eq a => Unpacker (LispVal -> Either LispError a)
+
+unpackEquals :: LispVal -> LispVal -> Unpacker -> Either LispError Bool
+unpackEquals a b (Unpacker u) =
+  catchError 
+    (do [u, v] <- mapM u [a, b]
+        return $ u == v)
+    (const $ return False)
+
+equal :: [LispVal] -> Either LispError LispVal
+equal [a, b] = do
+  primitiveEquals <- liftM or $ mapM (unpackEquals a b)
+                     [Unpacker unpackNum, Unpacker unpackStr, Unpacker unpackBool]
+  eqvEquals <- eqv [a, b]
+  return $ Bool $ primitiveEquals || let (Bool x) = eqvEquals in x
+equal args = throwError $ NumArgs 2 args
 
 -- Stricter than in the book, only accept real numbers.
 unpackNum :: LispVal -> Either LispError Integer
@@ -89,7 +107,14 @@ primitives = [ ("+", numericBinop (+)),
                ("string<?", strBoolBinop (<)),
                ("string>?", strBoolBinop (>)),
                ("string<=?", strBoolBinop (<=)),
-               ("string>=?", strBoolBinop (>=)) ]
+               ("string>=?", strBoolBinop (>=)),
+               -- string stuff
+               ("car", car),
+               ("cdr", cdr),
+               ("cons", cons),
+               ("eq?", eqv),
+               ("eqv?", eqv),
+               ("equal?", equal) ]
 
 -- "less primitives"
 -- NB. car == head
