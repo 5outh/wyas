@@ -1,20 +1,23 @@
 import System.Environment
+import Data.List(foldl1')
+import Control.Monad.Error
+
 import Parser
 import Types
-import Data.List(foldl1')
+import Error
 
-unpackNum :: LispVal -> Integer
-unpackNum (Number n) = n
--- Exercise...haha
---unpackNum (String n) = let parsed = reads n :: [(Integer, String)] 
---                       in case parsed of
---                        [] -> 0
---                        ((x,_):_) -> x                           
---unpackNum (List [n]) = unpackNum n
-unpackNum v = error $ show v ++ " is not a number."
 
-numericBinop :: (Integer -> Integer -> Integer) -> [LispVal] -> LispVal
-numericBinop f ls = Number $ foldl1' f $ map unpackNum ls
+-- Stricter than in the book, only accept real numbers.
+unpackNum :: LispVal -> Either LispError Integer
+unpackNum (Number n) = return n
+unpackNum v = throwError $ TypeMismatch "number" v
+
+numericBinop :: (Integer -> Integer -> Integer) 
+             -> [LispVal]
+             -> Either LispError LispVal
+numericBinop f []    = throwError $ NumArgs 2 []
+numericBinop f x@[_] = throwError $ NumArgs 2 x
+numericBinop f ls = mapM unpackNum ls >>= return . Number . foldl1 f
 
 -- Exercise
 isNumber, isString, isSymbol, isBoolean :: LispVal -> Bool
@@ -27,7 +30,7 @@ isBoolean _           = False
 isSymbol (Atom _)     = True
 isSymbol _            = False
 
-primitives :: [(String, [LispVal] -> LispVal)]
+primitives :: [(String, [LispVal] -> Either LispError LispVal)]
 primitives = [ ("+", numericBinop (+)),
                ("-", numericBinop (-)),
                ("*", numericBinop (*)),
@@ -35,23 +38,32 @@ primitives = [ ("+", numericBinop (+)),
                ("mod", numericBinop mod),
                ("quotient", numericBinop quot),
                ("remainder", numericBinop rem),
-               ("number?", Bool . all isNumber),
-               ("string?", Bool . all isString),
-               ("symbol?", Bool . all isSymbol) ]
+               ("number?", return . Bool . all isNumber),
+               ("string?", return . Bool . all isString),
+               ("symbol?", return . Bool . all isSymbol) ]
 
-apply :: String -> [LispVal] -> LispVal
-apply f args = maybe (Bool False) ($ args) $ lookup f primitives
+apply :: String -> [LispVal] -> Either LispError LispVal
+apply f args = maybe 
+  (throwError $ NotFunction "Unrecognized primitive function args" f)
+  ($ args)
+  (lookup f primitives)
 
-eval :: LispVal -> LispVal
+eval :: LispVal -> Either LispError LispVal
 eval expr = case expr of
-  (List [Atom "quote", val]) -> val
-  (List (Atom f : args))     -> apply f $ map eval args
-  a                          -> a
+  v@(String _) -> return v
+  v@(Number _) -> return v
+  v@(Bool _) -> return v
+  (List [Atom "quote", v]) -> return v
+  (List (Atom f : args))   -> mapM eval args >>= apply f
+  form -> throwError $ BadSpecialForm "Unrecognized Special Form" form
 
 runEval :: String -> IO ()
-runEval = print . eval . readExpr
+runEval s =
+  putStrLn . extractValue . trapError $ liftM show $ readExpr s >>= eval
 
 main :: IO ()
 main = do
   args <- getArgs
-  print (eval . readExpr $ head args)
+  case args of 
+    []    -> error "Please provide Scheme source string in args."
+    (x:_) -> runEval x

@@ -4,6 +4,8 @@ import Text.ParserCombinators.Parsec hiding (spaces, (<|>))
 import System.Environment
 import Control.Applicative hiding (many)
 import Types
+import Error
+import Control.Monad.Error
 
 symbol :: Parser Char
 symbol = oneOf "!#$%&|*+-/:<=>?@^_~"
@@ -48,7 +50,7 @@ parseExpr = anyOf
             , char '(' *> (try parseList <|> parseDottedList) <* char ')'
             ]
 
-readExpr :: String -> LispVal
+readExpr :: String -> Either LispError LispVal
 readExpr input = case parse parseExpr "lisp" input of
-  Left err  -> error $ "No match: " ++ show err
-  Right val -> val
+  Left err  -> throwError $ Parser err
+  Right val -> return val
