@@ -4,6 +4,7 @@ import System.Environment
 import Data.List(foldl1')
 import Control.Monad.Error
 import Data.IORef
+import System.IO
 
 import Parser
 import Types
@@ -199,11 +200,54 @@ eqv [List xs, List ys] = return $ Bool $
 eqv [_,_] = return $ Bool False
 eqv args = throwError $ NumArgs 2 args
 
+-- IO!
+ioPrimitives :: [(String, [LispVal] -> IOThrowsError LispVal)]
+ioPrimitives = [("apply", applyProc),
+                ("open-input-file", makePort ReadMode),
+                ("open-output-file", makePort WriteMode),
+                ("close-input-port", closePort),
+                ("close-output-port", closePort),
+                ("read", readProc),
+                ("write", writeProc),
+                ("read-contents", readContents),
+                ("read-all", readAll)]
+
+makePort :: IOMode -> [LispVal] -> IOThrowsError LispVal
+makePort mode [String filename] = liftM Port . liftIO $ openFile filename mode
+
+closePort :: [LispVal] -> IOThrowsError LispVal
+closePort [Port port] = liftIO $ hClose port >> (return $ Bool True)
+closePort _           = return $ Bool False
+
+readProc :: [LispVal] -> IOThrowsError LispVal
+readProc [] = readProc [Port stdin]
+readProc [Port port] = (liftIO $ hGetLine port) >>= liftThrows . readExpr
+
+writeProc :: [LispVal] -> IOThrowsError LispVal
+writeProc [obj]            = writeProc [obj, Port stdout]
+writeProc [obj, Port port] = liftIO $ hPrint port obj >> (return $ Bool True)
+
+readContents :: [LispVal] -> IOThrowsError LispVal
+readContents [String filename] = liftM String $ liftIO $ readFile filename
+
+load :: String -> IOThrowsError [LispVal]
+load filename = (liftIO $ readFile filename) >>= liftThrows . readExprList
+
+readAll :: [LispVal] -> IOThrowsError LispVal
+readAll [String filename] = liftM List $ load filename
+
 primitiveBindings :: IO Env
-primitiveBindings = nullEnv >>= (flip bindVars $ map makePrimitiveFunc primitives)
-  where makePrimitiveFunc (var, f) = (var, PrimitiveFunc f)
+primitiveBindings = nullEnv 
+                >>= (flip bindVars $ (map (mkFunc PrimitiveFunc) primitives)
+                                  ++ (map (mkFunc IOFunc) ioPrimitives)    )
+  where mkFunc ctor (var, f) = (var, ctor f)
+
+applyProc :: [LispVal] -> IOThrowsError LispVal
+applyProc [f, List args] = apply f args
+applyProc (f : args)     = apply f args
 
 apply :: LispVal -> [LispVal] -> IOThrowsError LispVal
+apply (IOFunc f) args = f args
 apply (PrimitiveFunc f) args = liftThrows $ f args
 apply (Func params varargs body closure) args
   | num params /= num args && varargs == Nothing =
@@ -224,6 +268,8 @@ eval env expr = case expr of
   v@(Number _) -> return v
   v@(Bool _) -> return v
   (Atom i)  -> getVar env i
+  (List [Atom "load", String filename]) ->
+    load filename >>= liftM last . mapM (eval env)
   (List [Atom "quote", v]) -> return v
   (List [Atom "if", pred, conseq, alt]) -> do
     result <- eval env pred
@@ -248,9 +294,15 @@ eval env expr = case expr of
     f' <- eval env f
     argVals <- mapM (eval env) args
     apply f' argVals
-  --(List (Atom f : args)) -> mapM (eval env) args >>= apply f
   form -> throwError $ BadSpecialForm "Unrecognized Special Form" form
 
 evalString :: Env -> String -> IO String
 evalString env expr = 
   runIOThrows $ liftM show $ (liftThrows $ readExpr expr) >>= eval env
+
+runOne :: [String] -> IO ()
+runOne []    = error "Nothing to run"
+runOne (file:args) = do
+    env <- primitiveBindings >>= flip bindVars [("args", List $ map String args)] 
+    (runIOThrows $ liftM show $ eval env (List [Atom "load", String file])) 
+        >>= hPutStrLn stderr

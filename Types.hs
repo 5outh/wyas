@@ -4,6 +4,7 @@ module Types where
 import Control.Monad.Error
 import Data.IORef
 import Text.Parsec.Error(ParseError)
+import System.IO
 
 data LispVal = 
     Atom String -- Atom with a name
@@ -17,6 +18,28 @@ data LispVal =
          , vararg :: Maybe String
          , body :: [LispVal]
          , closure :: Env }
+  | IOFunc ([LispVal] -> IOThrowsError LispVal)
+  | Port Handle
+
+showVal :: LispVal -> String
+showVal (Atom a) = a
+showVal (List xs) =  "(" ++ unwordsList xs ++ ")"
+showVal (DottedList xs lst) = "(" ++ unwordsList xs ++ " . " ++ show lst ++ ")" 
+showVal (Number i) = show i 
+showVal (String s) = show s
+showVal (Bool True) = "#t"
+showVal (Bool f)    = "#f"
+showVal (PrimitiveFunc _) = "<primitive>"
+showVal (Func args' vargs body env) =
+   "(lambda (" ++ unwords (map show args') ++
+      (case vargs of
+         Nothing -> ""
+         Just arg -> " . " ++ arg) ++ ") ...)"
+showVal (Port _) = "<IO port>"
+showVal (IOFunc _) = "<IO primitive>"
+
+instance Show LispVal where
+  show = showVal
 
 data LispError = 
     NumArgs Integer [LispVal]
@@ -58,27 +81,8 @@ extractValue :: ThrowsError a -> a
 extractValue (Right v) = v
 -- otherwise, a programmer error.
 
-
 unwordsList :: [LispVal] -> String
 unwordsList = unwords . map showVal
-
-showVal :: LispVal -> String
-showVal (Atom a) = a
-showVal (List xs) =  "(" ++ unwordsList xs ++ ")"
-showVal (DottedList xs lst) = "(" ++ unwordsList xs ++ " . " ++ show lst ++ ")" 
-showVal (Number i) = show i 
-showVal (String s) = show s
-showVal (Bool True) = "#t"
-showVal (Bool f)    = "#f"
-showVal (PrimitiveFunc _) = "<primitive>"
-showVal (Func args' vargs body env) =
-   "(lambda (" ++ unwords (map show args') ++
-      (case vargs of
-         Nothing -> ""
-         Just arg -> " . " ++ arg) ++ ") ...)"
-
-instance Show LispVal where
-  show = showVal
 
 mkFunc varargs env params body = return $ Func (map showVal params) varargs body env
 mkNormalFunc = mkFunc Nothing

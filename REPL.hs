@@ -1,10 +1,12 @@
+module REPL where
+
 import System.Console.Haskeline
 import Types
 import Evaluator
 import Control.Monad.Trans
 
-main :: IO ()
-main = do
+runRepl :: IO ()
+runRepl = do
   putStrLn "Welcome to the scheme REPL!"
   env <- primitiveBindings
   runInputT defaultSettings (loop env)
@@ -13,7 +15,8 @@ main = do
             ln <- getInputLine "> "
             case ln of
                 Nothing     -> return ()
-                Just "quit" -> outputStrLn "Goodbye!" >> return ()
+                Just "quit" -> outputStrLn "Goodbye!"
+                Just ":q"   -> outputStrLn "Goodbye!"
                 Just input  -> do
                   str <- lift $ evalString env input
                   outputStrLn str
