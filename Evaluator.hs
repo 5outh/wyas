@@ -1,8 +1,9 @@
-{-# Language ExistentialQuantification #-}
+{-# Language ExistentialQuantification, TupleSections #-}
 module Evaluator where
 import System.Environment
 import Data.List(foldl1')
 import Control.Monad.Error
+import Data.IORef
 
 import Parser
 import Types
@@ -10,6 +11,59 @@ import Error
 
 data Unpacker = 
   forall a. Eq a => Unpacker (LispVal -> Either LispError a)
+
+type Env = IORef [(String, IORef LispVal)]
+
+type IOThrowsError = ErrorT LispError IO
+
+liftThrows :: Either LispError a -> IOThrowsError a
+liftThrows (Right a) = return a
+liftThrows (Left e) = throwError e
+
+nullEnv :: IO Env
+nullEnv = newIORef []
+
+runIOThrows :: IOThrowsError String -> IO String
+runIOThrows action = runErrorT (trapError action) >>= return . extractValue
+
+isBound :: Env -> String -> IO Bool
+isBound envRef var = do
+  ref <- readIORef envRef
+  return . maybe False (const True) $ lookup var ref
+
+getVar :: Env -> String -> IOThrowsError LispVal
+getVar envRef var = do
+  env <- liftIO $ readIORef envRef
+  maybe (throwError $ UnboundVar "Getting an unbound variable" var)
+        (liftIO . readIORef)
+        (lookup var env)
+
+setVar :: Env -> String -> LispVal -> IOThrowsError LispVal
+setVar envRef var val = do
+  env <- liftIO $ readIORef envRef
+  maybe (throwError $ UnboundVar "Setting an unbound variable" var)
+        (liftIO . (`writeIORef` val))
+        (lookup var env)
+  return val
+
+defineVar :: Env -> String -> LispVal -> IOThrowsError LispVal
+defineVar envRef var val = do
+  def <- liftIO $ isBound envRef var
+  case def of
+    True -> setVar envRef var val
+    _    -> liftIO $ do
+      valRef <- newIORef val
+      env    <- readIORef envRef
+      writeIORef envRef ((var, valRef) : env)
+      return val
+
+bindVars :: Env -> [(String, LispVal)] -> IO Env
+bindVars envRef bindings = 
+      readIORef envRef
+  >>= extendEnv bindings
+  >>= newIORef 
+  where extendEnv bs env = liftM (++ env) (mapM addBinding bs)
+        addBinding (var, val) = newIORef val >>= return . (var,)
 
 unpackEquals :: LispVal -> LispVal -> Unpacker -> Either LispError Bool
 unpackEquals a b (Unpacker u) =
@@ -31,7 +85,6 @@ unpackNum :: LispVal -> Either LispError Integer
 unpackNum (Number n) = return n
 unpackNum v = throwError $ TypeMismatch "number" v
 
--- @MAYBE: No coercion!
 unpackStr :: LispVal -> Either LispError String
 unpackStr (String s) = return s
 unpackStr (Number s) = return $ show s
@@ -160,25 +213,36 @@ apply f args = maybe
   ($ args)
   (lookup f primitives)
 
-eval :: LispVal -> Either LispError LispVal
-eval expr = case expr of
+eval :: Env -> LispVal -> IOThrowsError LispVal
+eval env expr = case expr of
   v@(String _) -> return v
   v@(Number _) -> return v
   v@(Bool _) -> return v
+  (Atom i)  -> getVar env i
   (List [Atom "quote", v]) -> return v
   (List [Atom "if", pred, conseq, alt]) -> do
-    result <- eval pred
+    result <- eval env pred
     case result of 
-      Bool False -> eval alt
-      otherwise  -> eval conseq
-  (List (Atom f : args))   -> mapM eval args >>= apply f
+      Bool False -> eval env alt
+      otherwise  -> eval env conseq
+  (List [Atom "set!", Atom var, form]) ->
+    eval env form >>= setVar env var
+  (List [Atom "define", Atom var, form]) ->
+    eval env form >>= defineVar env var
+  (List (Atom f : args))   -> mapM (eval env) args >>= liftThrows . apply f
   form -> throwError $ BadSpecialForm "Unrecognized Special Form" form
 
-showEval :: String -> String
-showEval s = extractValue . trapError $ liftM show $ readExpr s >>= eval
+evalString :: Env -> String -> IO String
+evalString env expr = 
+  runIOThrows $ liftM show $ (liftThrows $ readExpr expr) >>= eval env
 
-runEval :: String -> IO ()
-runEval = putStrLn . showEval
+-- REPL uses outputStrLn, so this is fine
+
+--showEval :: String -> String
+--showEval s = extractValue . trapError $ liftM show $ readExpr s >>= eval
+
+--runEval :: String -> IO ()
+--runEval = putStrLn . showEval
 
 --main :: IO ()
 --main = do
