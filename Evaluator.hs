@@ -1,4 +1,5 @@
 {-# Language ExistentialQuantification #-}
+module Evaluator where
 import System.Environment
 import Data.List(foldl1')
 import Control.Monad.Error
@@ -173,13 +174,15 @@ eval expr = case expr of
   (List (Atom f : args))   -> mapM eval args >>= apply f
   form -> throwError $ BadSpecialForm "Unrecognized Special Form" form
 
-runEval :: String -> IO ()
-runEval s =
-  putStrLn . extractValue . trapError $ liftM show $ readExpr s >>= eval
+showEval :: String -> String
+showEval s = extractValue . trapError $ liftM show $ readExpr s >>= eval
 
-main :: IO ()
-main = do
-  args <- getArgs
-  case args of 
-    []    -> error "Please provide Scheme source string in args."
-    (x:_) -> runEval x
+runEval :: String -> IO ()
+runEval = putStrLn . showEval
+
+--main :: IO ()
+--main = do
+--  args <- getArgs
+--  case args of 
+--    []    -> error "Please provide Scheme source string in args."
+--    (x:_) -> runEval x
