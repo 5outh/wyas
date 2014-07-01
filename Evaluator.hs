@@ -1,4 +1,4 @@
-{-# Language ExistentialQuantification, TupleSections #-}
+{-# LANGUAGE TupleSections #-}
 module Evaluator where
 import System.Environment
 import Data.List(foldl1')
@@ -7,14 +7,6 @@ import Data.IORef
 
 import Parser
 import Types
-import Error
-
-data Unpacker = 
-  forall a. Eq a => Unpacker (LispVal -> Either LispError a)
-
-type Env = IORef [(String, IORef LispVal)]
-
-type IOThrowsError = ErrorT LispError IO
 
 liftThrows :: Either LispError a -> IOThrowsError a
 liftThrows (Right a) = return a
@@ -207,11 +199,24 @@ eqv [List xs, List ys] = return $ Bool $
 eqv [_,_] = return $ Bool False
 eqv args = throwError $ NumArgs 2 args
 
-apply :: String -> [LispVal] -> Either LispError LispVal
-apply f args = maybe 
-  (throwError $ NotFunction "Unrecognized primitive function args" f)
-  ($ args)
-  (lookup f primitives)
+primitiveBindings :: IO Env
+primitiveBindings = nullEnv >>= (flip bindVars $ map makePrimitiveFunc primitives)
+  where makePrimitiveFunc (var, f) = (var, PrimitiveFunc f)
+
+apply :: LispVal -> [LispVal] -> IOThrowsError LispVal
+apply (PrimitiveFunc f) args = liftThrows $ f args
+apply (Func params varargs body closure) args
+  | num params /= num args && varargs == Nothing =
+      throwError $ NumArgs (num params) args
+  | otherwise = (liftIO $ bindVars closure $ zip params args)
+            >>= bindVarArgs varargs 
+            >>= evalBody
+    where remainingArgs = drop (length params) args
+          num = toInteger . length
+          evalBody env = liftM last $ mapM (eval env) body
+          bindVarArgs arg env = case arg of
+            Just argName -> liftIO $ bindVars env [(argName, List remainingArgs)]
+            Nothing      -> return env
 
 eval :: Env -> LispVal -> IOThrowsError LispVal
 eval env expr = case expr of
@@ -229,24 +234,23 @@ eval env expr = case expr of
     eval env form >>= setVar env var
   (List [Atom "define", Atom var, form]) ->
     eval env form >>= defineVar env var
-  (List (Atom f : args))   -> mapM (eval env) args >>= liftThrows . apply f
+  (List (Atom "define" : List (Atom var : params) : body)) ->
+    mkNormalFunc env params body >>= defineVar env var
+  (List (Atom "define" : DottedList (Atom var : params) varargs : body)) ->
+    mkVarArgs varargs env params body >>= defineVar env var
+  (List (Atom "lambda" : List params : body)) ->
+    mkNormalFunc env params body
+  (List (Atom "lambda" : DottedList params varargs : body)) ->
+    mkVarArgs varargs env params body
+  (List (Atom "lambda" : varargs@(Atom _) : body)) ->
+    mkVarArgs varargs env [] body
+  (List (f : args)) -> do
+    f' <- eval env f
+    argVals <- mapM (eval env) args
+    apply f' argVals
+  --(List (Atom f : args)) -> mapM (eval env) args >>= apply f
   form -> throwError $ BadSpecialForm "Unrecognized Special Form" form
 
 evalString :: Env -> String -> IO String
 evalString env expr = 
   runIOThrows $ liftM show $ (liftThrows $ readExpr expr) >>= eval env
-
--- REPL uses outputStrLn, so this is fine
-
---showEval :: String -> String
---showEval s = extractValue . trapError $ liftM show $ readExpr s >>= eval
-
---runEval :: String -> IO ()
---runEval = putStrLn . showEval
-
---main :: IO ()
---main = do
---  args <- getArgs
---  case args of 
---    []    -> error "Please provide Scheme source string in args."
---    (x:_) -> runEval x

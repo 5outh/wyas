@@ -4,7 +4,6 @@ import Text.ParserCombinators.Parsec hiding (spaces, (<|>))
 import System.Environment
 import Control.Applicative hiding (many)
 import Types
-import Error
 import Control.Monad.Error
 
 symbol :: Parser Char
